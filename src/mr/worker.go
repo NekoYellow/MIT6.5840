@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -118,6 +119,9 @@ func Worker(mapf func(string, string) []KeyValue,
 				i = j
 			}
 
+		} else if phase == HANG_PHASE {
+			time.Sleep(10000)
+			continue
 		} else {
 			break
 		}

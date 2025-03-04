@@ -13,7 +13,8 @@ import (
 
 const MAP_PHASE = 0
 const REDUCE_PHASE = 1
-const TERMINATE_PHASE = 2
+const HANG_PHASE = 2
+const TERMINATE_PHASE = 3
 
 type Coordinator struct {
 	// Your definitions here.
@@ -36,6 +37,14 @@ func (c *Coordinator) Register(args *EmptyArgs, reply *IntReply) error {
 
 func (c *Coordinator) Assign(args *IntArgs, reply *TaskReply) error {
 	id := args.I
+	if c.TaskPointer == len(c.ATask) {
+		reply.Phase = TERMINATE_PHASE
+		return nil
+	}
+	if c.TaskPointer == c.NMapTask && c.NDone < c.NMapTask {
+		reply.Phase = HANG_PHASE
+		return nil
+	}
 	if c.TaskPointer < c.NMapTask {
 		task := c.ATask[c.TaskPointer]
 		reply.Phase = MAP_PHASE
@@ -43,7 +52,7 @@ func (c *Coordinator) Assign(args *IntArgs, reply *TaskReply) error {
 		reply.Mvalue = task.Value
 		reply.NReduce = c.NReduce
 		c.MMapWorker[id] = true
-	} else if c.TaskPointer < len(c.ATask) {
+	} else {
 		reply.Phase = REDUCE_PHASE
 		j := c.TaskPointer - c.NMapTask
 		reply.Rindex = j
@@ -52,8 +61,6 @@ func (c *Coordinator) Assign(args *IntArgs, reply *TaskReply) error {
 			files = append(files, fmt.Sprintf("%v-%v-%v", INTERM, i, j))
 		}
 		reply.Rfilenames = files
-	} else {
-		reply.Phase = TERMINATE_PHASE
 	}
 	c.TaskPointer++
 	return nil
