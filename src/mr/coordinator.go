@@ -9,65 +9,117 @@ import (
 	"net/rpc"
 	"os"
 	"strconv"
+	"sync"
+	"time"
 )
 
-const MAP_PHASE = 0
-const REDUCE_PHASE = 1
-const HANG_PHASE = 2
-const TERMINATE_PHASE = 3
+const (
+	MAP = iota
+	REDUCE
+	HANG
+	TERMINATE
+)
+
+const (
+	UNASSIGNED = iota
+	ASSIGNED
+	COMPLETED
+	FAILED
+)
+
+type TaskInfo struct {
+	Type      int
+	Status    int
+	Task      KeyValue
+	Timestamp time.Time
+}
 
 type Coordinator struct {
 	// Your definitions here.
-	NReduce     int
-	NWorker     int
-	MMapWorker  map[int]bool
-	ATask       []KeyValue
-	NMapTask    int
-	TaskPointer int
-	NDone       int
+	MapTasks        []TaskInfo
+	MapCompleted    bool
+	ReduceTasks     []TaskInfo
+	ReduceCompleted bool
+	Mutex           sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
-func (c *Coordinator) Register(args *EmptyArgs, reply *IntReply) error {
-	reply.I = c.NWorker
-	c.NWorker++
-	return nil
-}
+func (c *Coordinator) Assign(args *EmptyArgs, reply *TaskReply) error {
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
 
-func (c *Coordinator) Assign(args *IntArgs, reply *TaskReply) error {
-	id := args.I
-	if c.TaskPointer == len(c.ATask) {
-		reply.Phase = TERMINATE_PHASE
-		return nil
-	}
-	if c.TaskPointer == c.NMapTask && c.NDone < c.NMapTask {
-		reply.Phase = HANG_PHASE
-		return nil
-	}
-	if c.TaskPointer < c.NMapTask {
-		task := c.ATask[c.TaskPointer]
-		reply.Phase = MAP_PHASE
-		reply.Mkey = task.Key
-		reply.Mvalue = task.Value
-		reply.NReduce = c.NReduce
-		c.MMapWorker[id] = true
-	} else {
-		reply.Phase = REDUCE_PHASE
-		j := c.TaskPointer - c.NMapTask
-		reply.Rindex = j
-		files := []string{}
-		for i := range c.MMapWorker {
-			files = append(files, fmt.Sprintf("%v-%v-%v", INTERM, i, j))
+	if !c.MapCompleted {
+		cnt := 0
+		for i, info := range c.MapTasks {
+			st := info.Status
+			ts := info.Timestamp
+			if st == UNASSIGNED || st == FAILED || (st == ASSIGNED && time.Since(ts) > 10*time.Second) {
+				reply.Phase = MAP
+				reply.TaskID = i
+				reply.Mkey = info.Task.Key
+				reply.Mvalue = info.Task.Value
+				reply.NReduce = len(c.ReduceTasks)
+				c.MapTasks[i].Status = ASSIGNED
+				c.MapTasks[i].Timestamp = time.Now()
+				return nil
+			} else if st == COMPLETED {
+				cnt++
+			}
 		}
-		reply.Rfilenames = files
+		if cnt == len(c.MapTasks) {
+			c.MapCompleted = true
+		} else {
+			reply.Phase = HANG
+			return nil
+		}
 	}
-	c.TaskPointer++
+
+	if !c.ReduceCompleted {
+		cnt := 0
+		for i, info := range c.ReduceTasks {
+			st := info.Status
+			ts := info.Timestamp
+			if st == UNASSIGNED || st == FAILED || (st == ASSIGNED && time.Since(ts) > 10*time.Second) {
+				reply.Phase = REDUCE
+				reply.TaskID = i
+				files := []string{}
+				for id := range len(c.MapTasks) {
+					files = append(files, fmt.Sprintf("%v-%v-%v", INTERM, id, i))
+				}
+				reply.Rfilenames = files
+				c.ReduceTasks[i].Status = ASSIGNED
+				c.ReduceTasks[i].Timestamp = time.Now()
+				return nil
+			} else if st == COMPLETED {
+				cnt++
+			}
+		}
+		if cnt == len(c.ReduceTasks) {
+			c.ReduceCompleted = true
+		} else {
+			reply.Phase = HANG
+			return nil
+		}
+	}
+
+	reply.Phase = TERMINATE
 	return nil
 }
 
-func (c *Coordinator) Signal(args *IntArgs, reply *EmptyReply) error {
-	c.NDone++
+func (c *Coordinator) Signal(args *SignalArgs, reply *EmptyReply) error {
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
+
+	phase := args.Phase
+	i := args.TaskID
+
+	if phase == MAP {
+		c.MapTasks[i].Status = COMPLETED
+	} else if phase == REDUCE {
+		c.ReduceTasks[i].Status = COMPLETED
+	}
+
 	return nil
 }
 
@@ -97,7 +149,7 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	// return true
-	return c.NDone == len(c.ATask)
+	return c.MapCompleted && c.ReduceCompleted
 }
 
 // create a Coordinator.
@@ -106,12 +158,9 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
-	c.NReduce = nReduce
-	c.NWorker = 0
-	c.MMapWorker = map[int]bool{}
-	c.ATask = nil
-	c.TaskPointer = 0
-	c.NDone = 0
+	c.MapCompleted = false
+	c.ReduceCompleted = false
+	c.Mutex = sync.Mutex{}
 
 	// prepare map tasks
 	for _, filename := range files {
@@ -127,16 +176,21 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		}
 		content := string(rawContent)
 		// could split content into chunks
-		c.ATask = append(c.ATask, KeyValue{filename, content})
+		info := TaskInfo{}
+		info.Type = MAP
+		info.Status = UNASSIGNED
+		info.Task = KeyValue{filename, content}
+		c.MapTasks = append(c.MapTasks, info)
 	}
-	c.NMapTask = len(c.ATask)
 
 	// prepare reduce tasks
 	for i := range nReduce {
-		c.ATask = append(c.ATask, KeyValue{strconv.Itoa(i), strconv.Itoa(i)})
+		info := TaskInfo{}
+		info.Type = REDUCE
+		info.Status = UNASSIGNED
+		info.Task = KeyValue{strconv.Itoa(i), strconv.Itoa(i)}
+		c.ReduceTasks = append(c.ReduceTasks, info)
 	}
-
-	fmt.Fprintf(os.Stdout, "Number of map tasks: %v, number of total tasks: %v\n", c.NMapTask, len(c.ATask))
 
 	c.server()
 	return &c

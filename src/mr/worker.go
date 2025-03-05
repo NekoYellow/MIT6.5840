@@ -42,19 +42,13 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
-	// register this worker to coordinator
-	args := EmptyArgs{}
-	reply := IntReply{}
-	call("Coordinator.Register", &args, &reply)
-	id := reply.I
-
 	for {
-		args := IntArgs{}
-		args.I = id
+		args := EmptyArgs{}
 		reply := TaskReply{}
 		call("Coordinator.Assign", &args, &reply)
+		id := reply.TaskID
 		phase := reply.Phase
-		if phase == MAP_PHASE {
+		if phase == MAP {
 			key := reply.Mkey
 			value := reply.Mvalue
 			nReduce := reply.NReduce
@@ -77,9 +71,9 @@ func Worker(mapf func(string, string) []KeyValue,
 				fmt.Fprintf(files[i], "%v %v\n", kv.Key, kv.Value)
 			}
 
-		} else if phase == REDUCE_PHASE {
+		} else if phase == REDUCE {
 			filenames := reply.Rfilenames
-			oidx := reply.Rindex
+			oidx := id
 			intermediate := []KeyValue{}
 			for _, filename := range filenames {
 				file, err := os.Open(filename)
@@ -119,14 +113,16 @@ func Worker(mapf func(string, string) []KeyValue,
 				i = j
 			}
 
-		} else if phase == HANG_PHASE {
-			time.Sleep(10000)
+		} else if phase == HANG {
+			time.Sleep(time.Second)
 			continue
 		} else {
 			break
 		}
 
-		nargs := IntArgs{}
+		nargs := SignalArgs{}
+		nargs.Phase = phase
+		nargs.TaskID = id
 		nreply := EmptyReply{}
 		call("Coordinator.Signal", &nargs, &nreply)
 	}

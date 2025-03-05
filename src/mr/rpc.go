@@ -29,8 +29,9 @@ type ExampleReply struct {
 type EmptyArgs struct {
 }
 
-type IntArgs struct {
-	I int
+type SignalArgs struct {
+	Phase  int
+	TaskID int
 }
 
 type EmptyReply struct {
@@ -42,9 +43,9 @@ type IntReply struct {
 
 type TaskReply struct {
 	Phase      int
+	TaskID     int
 	Mkey       string
 	Mvalue     string
-	Rindex     int
 	Rfilenames []string
 	NReduce    int
 }
