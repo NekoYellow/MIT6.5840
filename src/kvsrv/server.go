@@ -15,8 +15,9 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type KVServer struct {
-	mu sync.Mutex
-	mp map[string]string
+	mu  sync.Mutex
+	mp  map[string]string
+	buf sync.Map
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -28,15 +29,38 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	if !args.IsAction {
+		kv.buf.Delete(args.OpID)
+		return
+	}
+	_, vis := kv.buf.Load(args.OpID)
+	if vis {
+		return
+	}
 	kv.mp[args.Key] = args.Value
+	kv.buf.Store(args.OpID, args.Value)
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	if !args.IsAction {
+		kv.buf.Delete(args.OpID)
+		return
+	}
+	value, vis := kv.buf.Load(args.OpID)
+	if vis {
+		str, ok := value.(string) // type assertion
+		if !ok {
+			panic("value is not a string")
+		}
+		reply.Value = str
+		return
+	}
 	oldValue := kv.mp[args.Key]
 	kv.mp[args.Key] = oldValue + args.Value
 	reply.Value = oldValue
+	kv.buf.Store(args.OpID, oldValue)
 }
 
 func StartKVServer() *KVServer {
@@ -44,6 +68,7 @@ func StartKVServer() *KVServer {
 
 	kv.mu = sync.Mutex{}
 	kv.mp = map[string]string{}
+	kv.buf = sync.Map{}
 
 	return kv
 }
