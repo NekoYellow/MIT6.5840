@@ -27,8 +27,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	if !args.IsAction {
 		kv.buf.Delete(args.OpID)
 		return
@@ -37,13 +35,13 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	if vis {
 		return
 	}
+	kv.mu.Lock()
 	kv.mp[args.Key] = args.Value
+	kv.mu.Unlock()
 	kv.buf.Store(args.OpID, args.Value)
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	if !args.IsAction {
 		kv.buf.Delete(args.OpID)
 		return
@@ -57,9 +55,11 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Value = str
 		return
 	}
+	kv.mu.Lock()
 	oldValue := kv.mp[args.Key]
 	kv.mp[args.Key] = oldValue + args.Value
 	reply.Value = oldValue
+	kv.mu.Unlock()
 	kv.buf.Store(args.OpID, oldValue)
 }
 
