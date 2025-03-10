@@ -27,11 +27,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
+	rf.currentTerm = args.Term
 	if args.Term > rf.currentTerm {
-		rf.role = FOLLOWER
-		rf.currentTerm = args.Term
+		rf.OnChange(FOLLOWER)
 	}
 	rf.votedFor = args.CandidateId
+	rf.electionTimer.Reset(RandomElectionTimeout())
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = true
 }
@@ -97,12 +98,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.votedFor = -1
-	}
-	rf.role = FOLLOWER
-	rf.receivedHB = true
+	rf.currentTerm = args.Term
+	rf.OnChange(FOLLOWER)
+	rf.electionTimer.Reset(RandomElectionTimeout())
 	reply.Term = rf.currentTerm
 	reply.Success = true
 }
