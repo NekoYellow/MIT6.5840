@@ -50,14 +50,6 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-type RoleType int
-
-const (
-	FOLLOWER = iota
-	CANDIDATE
-	LEADER
-)
-
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -66,23 +58,21 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	// Your data here (3A, 3B, 3C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-	CurrentTerm int      // latest term server has seen
-	VotedFor    int      // candidateId that received vote in current term
-	VotedBy     int      // amount of votes received
-	Role        RoleType // state of the server
-	ReceivedHB  bool     // if this server received heartbeat from leader this term
+	// persistent state on all servers (updated on stable storage before responding to RPCs)
+	currentTerm int // latest term server has seen
+	votedFor    int // candidateId that received vote in current term
+
+	// others
+	role       RoleType // state of the server
+	receivedHB bool     // if this server received heartbeat from leader this term
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	// Your code here (3A).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.CurrentTerm, rf.Role == LEADER
+	return rf.currentTerm, rf.role == LEADER
 }
 
 // save Raft's persistent state to stable storage,
@@ -176,19 +166,19 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for !rf.killed() {
 
-		// Your code here (3A)
 		// Check if a leader election should be started.
-		if rf.Role != LEADER && !rf.ReceivedHB {
+		if rf.role != LEADER && !rf.receivedHB {
 			rf.mu.Lock()
-			rf.CurrentTerm++
-			rf.VotedBy = 1
-			rf.Role = CANDIDATE
+			rf.currentTerm++
+			rf.role = CANDIDATE
 			rf.mu.Unlock()
 			args := RequestVoteArgs{
-				Term:        rf.CurrentTerm,
+				Term:        rf.currentTerm,
 				CandidateId: rf.me,
 			}
 
+			voteCount := atomic.Int32{}
+			voteCount.Store(1)
 			wg := sync.WaitGroup{}
 			for i := range len(rf.peers) {
 				if i == rf.me {
@@ -205,23 +195,23 @@ func (rf *Raft) ticker() {
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
 					if reply.VoteGranted {
-						rf.VotedBy++
-						if rf.VotedBy > len(rf.peers)/2 {
-							rf.Role = LEADER
+						voteCount.Add(1)
+						if int(voteCount.Load()) > len(rf.peers)/2 {
+							rf.role = LEADER
 						}
-					} else if reply.Term > rf.CurrentTerm {
-						rf.CurrentTerm = reply.Term
-						rf.Role = FOLLOWER
+					} else if reply.Term > rf.currentTerm {
+						rf.currentTerm = reply.Term
+						rf.role = FOLLOWER
 					}
 				}(i)
 			}
 			wg.Wait()
 
 			rf.mu.Lock()
-			if rf.Role == LEADER {
+			if rf.role == LEADER {
 				rf.mu.Unlock()
 				args := AppendEntriesArgs{
-					Term: rf.CurrentTerm,
+					Term: rf.currentTerm,
 				}
 				for i := range len(rf.peers) {
 					if i == rf.me {
@@ -241,7 +231,7 @@ func (rf *Raft) ticker() {
 		}
 
 		rf.mu.Lock()
-		rf.ReceivedHB = false
+		rf.receivedHB = false
 		rf.mu.Unlock()
 
 		// pause for a random amount of time between 500 and 1500
@@ -254,7 +244,7 @@ func (rf *Raft) ticker() {
 func (rf *Raft) leaderTicker() {
 	for !rf.killed() {
 		args := AppendEntriesArgs{
-			Term: rf.CurrentTerm,
+			Term: rf.currentTerm,
 		}
 		wg := sync.WaitGroup{}
 		for i := range len(rf.peers) {
@@ -270,16 +260,16 @@ func (rf *Raft) leaderTicker() {
 				}
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				if rf.CurrentTerm < reply.Term {
-					rf.CurrentTerm = reply.Term
-					rf.Role = FOLLOWER
+				if rf.currentTerm < reply.Term {
+					rf.currentTerm = reply.Term
+					rf.role = FOLLOWER
 				}
 			}(i)
 		}
 		wg.Wait()
 
 		rf.mu.Lock()
-		if rf.Role != LEADER {
+		if rf.role != LEADER {
 			rf.mu.Unlock()
 			break
 		}
@@ -306,12 +296,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	// Your initialization code here (3A, 3B, 3C).
-	rf.CurrentTerm = 0
-	rf.VotedFor = -1
-	rf.VotedBy = 0
-	rf.Role = FOLLOWER
-	rf.ReceivedHB = false
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.role = FOLLOWER
+	rf.receivedHB = false
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

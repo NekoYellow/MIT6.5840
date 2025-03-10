@@ -10,3 +10,11 @@ func DPrintf(format string, a ...interface{}) {
 		log.Printf(format, a...)
 	}
 }
+
+type RoleType int
+
+const (
+	FOLLOWER = iota
+	CANDIDATE
+	LEADER
+)

@@ -3,7 +3,6 @@ package raft
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
-	// Your data here (3A, 3B).
 	Term         int // candidate's term
 	CandidateId  int // candidate requesting vote
 	LastLogIndex int // index of candidate's last log entry
@@ -13,25 +12,28 @@ type RequestVoteArgs struct {
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
-	// Your data here (3A).
 	Term        int  // currentTerm, for candidate to update itself
 	VoteGranted bool // true means candidate received vote
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (3A, 3B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term >= rf.CurrentTerm && (rf.VotedFor == -1 || rf.VotedFor == args.CandidateId) {
-		rf.CurrentTerm = args.Term
-		rf.VotedFor = args.CandidateId
-		reply.Term = rf.CurrentTerm
-		reply.VoteGranted = true
-	} else {
-		reply.Term = rf.CurrentTerm
+
+	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
+		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
+		return
 	}
+
+	if args.Term > rf.currentTerm {
+		rf.role = FOLLOWER
+		rf.currentTerm = args.Term
+	}
+	rf.votedFor = args.CandidateId
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = true
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -88,14 +90,21 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term < rf.CurrentTerm {
-		reply.Term = rf.CurrentTerm
-	} else {
-		rf.CurrentTerm = args.Term
-		rf.Role = FOLLOWER
-		rf.ReceivedHB = true
-		rf.VotedFor = -1
+
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
 	}
+
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+	}
+	rf.role = FOLLOWER
+	rf.receivedHB = true
+	reply.Term = rf.currentTerm
+	reply.Success = true
 }
 
 // send an AppendEntries RPC to a server.
