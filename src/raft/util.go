@@ -36,6 +36,12 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+type LogEntry struct {
+	Command any // command for state machine
+	Term    int // term when entry was received by leader
+	Index   int // index of the entry in log
+}
+
 type RoleType int
 
 const (
