@@ -157,15 +157,12 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	rf.mu.RLock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.role != LEADER {
-		rf.mu.RUnlock()
 		return -1, -1, false // index, term, isLeader
 	}
 	newLogIndex := rf.lastLog().Index + 1
-	rf.mu.RUnlock()
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.logs = append(rf.logs, LogEntry{ // append entry locally
 		Term:    rf.currentTerm,
 		Command: command,
@@ -199,8 +196,10 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) StartElection() {
 	rf.votedFor = rf.me
 	args := RequestVoteArgs{
-		Term:        rf.currentTerm,
-		CandidateId: rf.me,
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: rf.lastLog().Index,
+		LastLogTerm:  rf.lastLog().Term,
 	}
 	votesCount := atomic.Int32{}
 	votesCount.Store(1)
@@ -278,6 +277,7 @@ func (rf *Raft) replicateOnce(peer int) {
 	}
 	if !reply.Success {
 		if reply.Term > rf.currentTerm {
+			rf.currentTerm = reply.Term
 			rf.OnChange(FOLLOWER)
 		} else if reply.Term == rf.currentTerm {
 			rf.nextIndex[peer] = reply.ConflictIndex
