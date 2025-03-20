@@ -261,7 +261,7 @@ func (rf *Raft) replicateOnce(peer int) {
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
 		PrevLogIndex: prevIndex,
-		PrevLogTerm:  rf.logs[prevIndex-firstIndex].Term,
+		PrevLogTerm:  rf.logWithIndex(prevIndex).Term,
 		Entries:      entries,
 		LeaderCommit: rf.commitIndex,
 	}
@@ -288,13 +288,15 @@ func (rf *Raft) replicateOnce(peer int) {
 			L, R := firstIndex, prevIndex
 			for L < R {
 				M := (L + R + 1) / 2
-				if rf.logWithIndex(M).Term == reply.ConflictTerm {
+				if rf.logWithIndex(M).Term <= reply.ConflictTerm {
 					L = M
 				} else {
 					R = M - 1
 				}
 			}
-			rf.nextIndex[peer] = L
+			if rf.logWithIndex(L).Term == reply.ConflictTerm {
+				rf.nextIndex[peer] = L
+			}
 		}
 	} else {
 		rf.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)

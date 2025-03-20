@@ -24,6 +24,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
+	if args.Term > rf.currentTerm {
+		rf.currentTerm, rf.votedFor = args.Term, -1
+		rf.OnChange(FOLLOWER)
+	}
+
 	if rf.lastLog().Term > args.LastLogTerm ||
 		(rf.lastLog().Term == args.LastLogTerm && rf.lastLog().Index > args.LastLogIndex) {
 		reply.Term = rf.currentTerm
@@ -31,10 +36,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	rf.currentTerm = args.Term
-	if args.Term > rf.currentTerm {
-		rf.OnChange(FOLLOWER)
-	}
 	rf.votedFor = args.CandidateId
 	rf.electionTimer.Reset(RandomElectionTimeout())
 	reply.Term = rf.currentTerm
@@ -98,8 +99,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	firstIndex := rf.firstLog().Index
 
 	// peer is the leader
-	// could have problem
-	rf.currentTerm = args.Term
+	if args.Term > rf.currentTerm {
+		rf.currentTerm, rf.votedFor = args.Term, -1
+	}
 	rf.OnChange(FOLLOWER)
 	rf.electionTimer.Reset(RandomElectionTimeout())
 
@@ -112,7 +114,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// log has conflict
 	if args.PrevLogIndex > lastIndex ||
-		args.PrevLogTerm != rf.logs[args.PrevLogIndex-firstIndex].Term {
+		args.PrevLogTerm != rf.logWithIndex(args.PrevLogIndex).Term {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		if args.PrevLogIndex > lastIndex {
@@ -120,7 +122,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.ConflictTerm = -1
 		} else {
 			i := args.PrevLogIndex
-			for i >= firstIndex && rf.logs[i-firstIndex].Term == args.PrevLogTerm { // curious here
+			for i >= firstIndex && rf.logWithIndex(i).Term == args.PrevLogTerm { // curious here
 				i--
 			}
 			reply.ConflictIndex = i + 1
@@ -131,7 +133,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// append new entries
 	for i, entry := range args.Entries {
-		if entry.Index > lastIndex || rf.logs[entry.Index-firstIndex].Term != entry.Term {
+		if entry.Index > lastIndex || rf.logWithIndex(entry.Index).Term != entry.Term {
 			rf.logs = append(rf.logs[:entry.Index-firstIndex], args.Entries[i:]...)
 			break
 		}
