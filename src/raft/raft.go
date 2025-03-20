@@ -18,14 +18,13 @@ package raft
 //
 
 import (
-	//	"bytes"
-
+	"bytes"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.5840/labgob"
+	"6.5840/labgob"
 	"6.5840/labrpc"
 )
 
@@ -80,7 +79,6 @@ func (rf *Raft) OnChange(newRole RoleType) {
 	case FOLLOWER:
 		rf.electionTimer.Reset(RandomElectionTimeout()) // stay good
 		rf.heartbeatTimer.Stop()                        // stop heartbeat
-		rf.votedFor = -1                                // reset vote
 	case CANDIDATE:
 	}
 }
@@ -105,14 +103,13 @@ func (rf *Raft) logWithIndex(i int) LogEntry {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (3C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	raftState := w.Bytes()
+	rf.persister.Save(raftState, nil)
 }
 
 // restore previously persisted state.
@@ -120,19 +117,18 @@ func (rf *Raft) readPersist(data []byte) {
 	if len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (3C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var logs []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil || d.Decode(logs) != nil {
+		DPrintf("{Node %v} fails to decode persisted state", rf.me)
+	} else {
+		rf.currentTerm, rf.votedFor, rf.logs = currentTerm, votedFor, logs
+		rf.lastApplied, rf.commitIndex = rf.firstLog().Index, rf.firstLog().Index
+	}
 }
 
 // the service says it has created a snapshot that has
@@ -168,6 +164,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 		Index:   newLogIndex,
 	})
+	rf.persist()
 	rf.matchIndex[rf.me], rf.nextIndex[rf.me] = newLogIndex, newLogIndex+1
 	rf.BroadcastHeartbeat(true) // broadcast entry to all peers
 	return newLogIndex, rf.currentTerm, true
@@ -195,6 +192,7 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) StartElection() {
 	rf.votedFor = rf.me
+	rf.persist()
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,
@@ -226,8 +224,9 @@ func (rf *Raft) StartElection() {
 					rf.OnChange(LEADER)
 				}
 			} else if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
 				rf.OnChange(FOLLOWER)
+				rf.currentTerm, rf.votedFor = reply.Term, -1
+				rf.persist()
 			}
 		}(i)
 	}
@@ -277,8 +276,9 @@ func (rf *Raft) replicateOnce(peer int) {
 	}
 	if !reply.Success {
 		if reply.Term > rf.currentTerm {
-			rf.currentTerm = reply.Term
 			rf.OnChange(FOLLOWER)
+			rf.currentTerm, rf.votedFor = reply.Term, -1
+			rf.persist()
 		} else if reply.Term == rf.currentTerm {
 			rf.nextIndex[peer] = reply.ConflictIndex
 			if reply.ConflictTerm == -1 {
@@ -342,8 +342,9 @@ func (rf *Raft) ticker() {
 		select {
 		case <-rf.electionTimer.C: // election
 			rf.mu.Lock()
-			rf.currentTerm++
 			rf.OnChange(CANDIDATE)
+			rf.currentTerm++
+			rf.persist()
 			rf.StartElection()
 			rf.electionTimer.Reset(RandomElectionTimeout()) // in case of split vote
 			rf.mu.Unlock()

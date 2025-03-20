@@ -25,8 +25,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if args.Term > rf.currentTerm {
-		rf.currentTerm, rf.votedFor = args.Term, -1
 		rf.OnChange(FOLLOWER)
+		rf.currentTerm, rf.votedFor = args.Term, -1
+		rf.persist()
 	}
 
 	if rf.lastLog().Term > args.LastLogTerm ||
@@ -37,6 +38,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	rf.votedFor = args.CandidateId
+	rf.persist()
 	rf.electionTimer.Reset(RandomElectionTimeout())
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = true
@@ -101,6 +103,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// peer is the leader
 	if args.Term > rf.currentTerm {
 		rf.currentTerm, rf.votedFor = args.Term, -1
+		rf.persist()
 	}
 	rf.OnChange(FOLLOWER)
 	rf.electionTimer.Reset(RandomElectionTimeout())
@@ -135,6 +138,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for i, entry := range args.Entries {
 		if entry.Index > lastIndex || rf.logWithIndex(entry.Index).Term != entry.Term {
 			rf.logs = append(rf.logs[:entry.Index-firstIndex], args.Entries[i:]...)
+			rf.persist()
 			break
 		}
 	}
